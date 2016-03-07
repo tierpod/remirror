@@ -8,11 +8,9 @@ import (
 	"io"
 	"os"
 	"strconv"
-	//	"bytes"
 	"io/ioutil"
 	"log"
 	"net/http"
-	//	"sync"
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -28,6 +26,7 @@ var (
 	dns_client  = dns.Client{}
 
 	re_revision = regexp.MustCompile(`<revision>(\d+)</revision>`)
+	re_timestamp = regexp.MustCompile(`<timestamp>(\d+)</timestamp>`)
 )
 
 type HTTPError int
@@ -46,13 +45,13 @@ func should_cache(path string) bool {
 	if strings.HasSuffix(path, ".rpm") {
 		return true
 	}
-	if strings.Contains(path, "/repodata/") && (strings.HasSuffix(path, "xml.gz") ||
-		strings.HasSuffix(path, "sqlite.bz2")) {
+	if strings.Contains(path, "/repodata/") && (strings.HasSuffix(path, ".gz") ||
+		strings.HasSuffix(path, ".bz2") || strings.HasSuffix(path, ".xz")) {
 		return true
 	}
-	if strings.HasPrefix(path, "/our_private_repomdcache/") {
-		return true
-	}
+//	if strings.HasPrefix(path, "/our_private_repomdcache/") {
+//		return true
+//	}
 	return false
 }
 
@@ -74,7 +73,8 @@ func main() {
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 
-		fmt.Println("\n")
+		log.Println(r.Method + " http://" + r.Host + r.RequestURI)
+
 
 		err := func() error {
 
@@ -125,9 +125,12 @@ func main() {
 					if err != nil {
 						log.Println(err)
 					}
-					fmt.Println("served from cache:", local_path)
 					return nil
 				}
+			}
+
+			if upstream == "wtf" {
+				return HTTPError(404)
 			}
 
 			log.Println("-->", upstream+r.RequestURI)
@@ -199,17 +202,13 @@ func main() {
 			return nil
 		}()
 
-		msg := r.Method + " http://" + r.Host + r.RequestURI
-
 		he, ok := err.(HTTPError)
 		if ok {
 			http.Error(w, he.Error(), he.Code())
-			log.Println(msg, he.Error())
+			fmt.Println("\t\t", he.Error())
 		} else if err != nil {
 			http.Error(w, err.Error(), 500)
-			log.Println(msg, "500 "+err.Error())
-		} else {
-			log.Println(msg)
+			fmt.Println("\t\t500 "+err.Error())
 		}
 	})
 
@@ -241,7 +240,7 @@ func centos_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host 
 
 func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host, data string) error {
 
-	fmt.Println("fedora_mirrorlist", r.URL.String())
+	//fmt.Println("fedora_mirrorlist", r.URL.String())
 
 	err := r.ParseForm()
 	if err != nil {
@@ -319,6 +318,19 @@ func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host,
 
 	w.Header().Set("Content-Type", "application/metalink+xml")
 
+	ts_matches := re_timestamp.FindAllSubmatch(buf.Bytes(), -1)
+	if ts_matches == nil {
+		return fmt.Errorf("no <timestamp> tag found in repomd.xml")
+	}
+
+	ts_txt := ""
+	for _, ts_m := range ts_matches {
+		ts_txt = string(ts_m[1])
+	}
+
+	// apparently the validation is retarded in yum and
+	// looks at the "last" timestamp
+
 	matches := re_revision.FindSubmatch(buf.Bytes())
 	if matches == nil {
 		return fmt.Errorf("no <revision> tag found in repomd.xml")
@@ -326,7 +338,9 @@ func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host,
 
 	revision_txt := string(matches[1])
 
-	fmt.Println("extracted timestamp", revision_txt)
+	revision_txt = ts_txt
+
+	//fmt.Println("extracted timestamp", revision_txt)
 
 	revision, err := strconv.Atoi(revision_txt)
 	if err != nil {
