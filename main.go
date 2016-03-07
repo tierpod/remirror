@@ -1,11 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"crypto/md5"
-	"crypto/sha1"
-	"crypto/sha256"
-	"crypto/sha512"
 	"flag"
 	"fmt"
 	"github.com/miekg/dns"
@@ -15,10 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"regexp"
 	"strconv"
 	"strings"
-	"time"
 )
 
 var (
@@ -171,7 +164,7 @@ func main() {
 
 			w.WriteHeader(resp.StatusCode)
 
-			n, err = io.Copy(out, resp.Body)
+			n, err := io.Copy(out, resp.Body)
 			if err != nil {
 				log.Println(err)
 				return nil
@@ -236,7 +229,7 @@ func centos_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host 
 	return nil
 }
 
-func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host, data string) error {
+func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host string) error {
 
 	err := r.ParseForm()
 	if err != nil {
@@ -247,18 +240,21 @@ func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host,
 	arch := r.Form.Get("arch")
 
 	upstream := "mirrors.fedoraproject.org"
-	if addr, err := resolve(upstream, dns_server); err != nil {
+	addr, err := resolve(upstream, dns_server)
+	if err != nil {
 		return err
 	}
 
 	log.Println("-->", "http://"+upstream+r.RequestURI)
 
-	if req, err := http.NewRequest("GET", "http://"+addr+r.RequestURI, nil); err != nil {
+	req, err := http.NewRequest("GET", "http://"+addr+r.RequestURI, nil)
+	if err != nil {
 		return err
 	}
 	req.Header.Set("Host", upstream)
 
-	if resp, err := http_client.Do(req); err != nil {
+	resp, err := http_client.Do(req)
+	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
@@ -267,7 +263,8 @@ func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host,
 		return HTTPError(resp.StatusCode)
 	}
 
-	if tmp, err := ioutil.ReadAll(resp.Body); err != nil {
+	tmp, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
 		return err
 	}
 
@@ -282,8 +279,9 @@ func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host,
 		s = s[:start] + us + s[end:]
 	}
 
-	w.Header.Set("Content-Length", len(s))
-	w.WriteStatus(200)
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.Header().Set("Content-Length", strconv.Itoa(len(s)))
+	w.WriteHeader(200)
 	if _, err := io.WriteString(w, s); err != nil {
 		log.Println(err)
 		return nil
