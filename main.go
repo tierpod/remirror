@@ -2,21 +2,21 @@ package main
 
 import (
 	"bytes"
-	"flag"
-	"fmt"
-	"github.com/miekg/dns"
-	"io"
-	"os"
-	"strconv"
-	"io/ioutil"
-	"log"
-	"net/http"
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
+	"flag"
+	"fmt"
+	"github.com/miekg/dns"
+	"io"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"os"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,9 +24,6 @@ import (
 var (
 	http_client = http.Client{}
 	dns_client  = dns.Client{}
-
-	re_revision = regexp.MustCompile(`<revision>(\d+)</revision>`)
-	re_timestamp = regexp.MustCompile(`<timestamp>(\d+)</timestamp>`)
 )
 
 type HTTPError int
@@ -49,9 +46,6 @@ func should_cache(path string) bool {
 		strings.HasSuffix(path, ".bz2") || strings.HasSuffix(path, ".xz")) {
 		return true
 	}
-//	if strings.HasPrefix(path, "/our_private_repomdcache/") {
-//		return true
-//	}
 	return false
 }
 
@@ -75,12 +69,11 @@ func main() {
 
 		log.Println(r.Method + " http://" + r.Host + r.RequestURI)
 
-
 		err := func() error {
 
 			// Some special sauce mirrorlist handlers that will point to ourselves
 			if r.Host == "mirrors.fedoraproject.org" {
-				return fedora_mirrorlist(w, r, dns_server, host, data)
+				return fedora_mirrorlist(w, r, dns_server, host)
 			}
 			if r.Host == "mirrorlist.centos.org" {
 				return centos_mirrorlist(w, r, dns_server, host)
@@ -90,15 +83,13 @@ func main() {
 			upstream := ""
 
 			if strings.HasPrefix(r.URL.Path, "/archlinux/") {
-				upstream = "https://mirrors.kernel.org"
+				upstream = "https://mirrors.xmission.com"
 			} else if strings.HasPrefix(r.URL.Path, "/centos/") {
 				upstream = "https://mirrors.xmission.com"
 			} else if strings.HasPrefix(r.URL.Path, "/fedora/") {
 				upstream = "https://mirrors.xmission.com"
 			} else if strings.HasPrefix(r.URL.Path, "/fedora-epel/") {
 				upstream = "https://mirrors.xmission.com"
-			} else if strings.HasPrefix(r.URL.Path, "/our_private_repomdcache/") {
-				upstream = "wtf"
 			}
 
 			if upstream == "" {
@@ -127,10 +118,6 @@ func main() {
 					}
 					return nil
 				}
-			}
-
-			if upstream == "wtf" {
-				return HTTPError(404)
 			}
 
 			log.Println("-->", upstream+r.RequestURI)
@@ -174,6 +161,7 @@ func main() {
 
 			for k, vs := range resp.Header {
 				for _, v := range vs {
+					fmt.Printf("proxy back header %#v\t%#v\n", k, v)
 					w.Header().Add(k, v)
 				}
 			}
@@ -183,9 +171,14 @@ func main() {
 
 			w.WriteHeader(resp.StatusCode)
 
-			_, err = io.Copy(out, resp.Body)
+			n, err = io.Copy(out, resp.Body)
 			if err != nil {
 				log.Println(err)
+				return nil
+			}
+
+			if n != resp.ContentLength {
+				log.Printf("Short data returned from server (Content-Length %d received %d)\n", resp.ContentLength, n)
 				return nil
 			}
 
@@ -208,7 +201,7 @@ func main() {
 			fmt.Println("\t\t", he.Error())
 		} else if err != nil {
 			http.Error(w, err.Error(), 500)
-			fmt.Println("\t\t500 "+err.Error())
+			fmt.Println("\t\t500 " + err.Error())
 		}
 	})
 
@@ -234,13 +227,16 @@ func centos_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host 
 
 	us := "http://" + host + "/centos/" + release + "/" + repo + "/" + arch + "/"
 
-	io.WriteString(w, us)
+	if _, err := io.WriteString(w, us); err != nil {
+		log.Println(err)
+		return nil
+	}
+
+	log.Println("returned fudged mirrorlist " + us)
 	return nil
 }
 
 func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host, data string) error {
-
-	//fmt.Println("fedora_mirrorlist", r.URL.String())
 
 	err := r.ParseForm()
 	if err != nil {
@@ -250,15 +246,19 @@ func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host,
 	repo := r.Form.Get("repo")
 	arch := r.Form.Get("arch")
 
-	if repo != "epel-7" {
-		fmt.Println("not sure how to handle fedora repo", repo)
-		return HTTPError(404)
+	upstream := "mirrors.fedoraproject.org"
+	if addr, err := resolve(upstream, dns_server); err != nil {
+		return err
 	}
 
-	upstream := "http://mirror.oss.ou.edu/epel/7/" + arch + "/repodata/repomd.xml"
+	log.Println("-->", "http://"+upstream+r.RequestURI)
 
-	resp, err := http_client.Get(upstream)
-	if err != nil {
+	if req, err := http.NewRequest("GET", "http://"+addr+r.RequestURI, nil); err != nil {
+		return err
+	}
+	req.Header.Set("Host", upstream)
+
+	if resp, err := http_client.Do(req); err != nil {
 		return err
 	}
 	defer resp.Body.Close()
@@ -267,113 +267,30 @@ func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host,
 		return HTTPError(resp.StatusCode)
 	}
 
-	tmp, err := ioutil.TempFile(data, "remirror_tmp_")
-	if err != nil {
-		return err
-	}
-	tmp_path := tmp.Name()
-	//fmt.Println("tmp", tmp_path)
-
-	defer tmp.Close()
-	defer func() {
-		if tmp_path != "" {
-			os.Remove(tmp_path)
-		}
-	}()
-
-	md5_sum := md5.New()
-	sha1_sum := sha1.New()
-	sha256_sum := sha256.New()
-	sha512_sum := sha512.New()
-	buf := &bytes.Buffer{}
-
-	out := io.MultiWriter(
-		tmp,
-		md5_sum,
-		sha1_sum,
-		sha256_sum,
-		sha512_sum,
-		buf,
-	)
-
-	n, err := io.Copy(out, resp.Body)
-	if err != nil {
+	if tmp, err := ioutil.ReadAll(resp.Body); err != nil {
 		return err
 	}
 
-	// http://mirrors.kernel.org/fedora-epel/7/x86_64/repodata/repomd.xml
+	s := string(tmp)
 
-	//local_url := "/our_private_repomdcache/" + fmt.Sprintf("%x", md5_sum.Sum(nil)) + "/epel/7/" + arch + "/repodata/repomd.xml"
+	start := strings.Index(s, `<resources maxconnections="1">`)
+	end := strings.Index(s, `</resources>`)
+	us := ""
 
-	local_url := "/fedora-epel/7/" + arch + "/repodata/repomd.xml"
-	local_path := data + local_url
-
-	os.MkdirAll(path.Dir(local_path), 0755)
-
-	err = os.Rename(tmp_path, local_path)
-	if err != nil {
-		return err
-	}
-	tmp_path = ""
-
-	w.Header().Set("Content-Type", "application/metalink+xml")
-
-	ts_matches := re_timestamp.FindAllSubmatch(buf.Bytes(), -1)
-	if ts_matches == nil {
-		return fmt.Errorf("no <timestamp> tag found in repomd.xml")
+	if start != -1 && end != -1 && repo == "epel-7" {
+		us = `<url protocol="http" type="http" location="US" preference="100">http://` + host + `/fedora-epel/7/` + arch + `/repodata/repomd.xml</url>`
+		s = s[:start] + us + s[end:]
 	}
 
-	ts_txt := ""
-	for _, ts_m := range ts_matches {
-		ts_txt = string(ts_m[1])
-	}
-
-	// apparently the validation is retarded in yum and
-	// looks at the "last" timestamp
-
-	matches := re_revision.FindSubmatch(buf.Bytes())
-	if matches == nil {
-		return fmt.Errorf("no <revision> tag found in repomd.xml")
-	}
-
-	revision_txt := string(matches[1])
-
-	revision_txt = ts_txt
-
-	//fmt.Println("extracted timestamp", revision_txt)
-
-	revision, err := strconv.Atoi(revision_txt)
-	if err != nil {
-		return err
-	}
-
-	now := time.Unix(int64(revision), 0)
-	txt := now.Format(time.RFC1123)
-
-	us := "http://" + host + local_url
-
-	_, err = io.WriteString(w, `<?xml version="1.0" encoding="utf-8"?>
-<metalink version="3.0" xmlns="http://www.metalinker.org/" type="dynamic" pubdate="`+txt+`" generator="mirrormanager" xmlns:mm0="http://fedorahosted.org/mirrormanager">
-  <files>
-    <file name="repomd.xml">
-      <mm0:timestamp>`+revision_txt+`</mm0:timestamp>
-      <size>`+strconv.Itoa(int(n))+`</size>
-      <verification>
-        <hash type="md5">`+fmt.Sprintf("%x", md5_sum.Sum(nil))+`</hash>
-        <hash type="sha1">`+fmt.Sprintf("%x", sha1_sum.Sum(nil))+`</hash>
-        <hash type="sha256">`+fmt.Sprintf("%x", sha256_sum.Sum(nil))+`</hash>
-        <hash type="sha512">`+fmt.Sprintf("%x", sha512_sum.Sum(nil))+`</hash>
-      </verification>
-      <resources maxconnections="1">
-        <url protocol="http" type="http" location="US" preference="100">`+us+`</url>
-      </resources>
-    </file>
-  </files>
-</metalink>
-`)
-
-	if err != nil {
+	w.Header.Set("Content-Length", len(s))
+	w.WriteStatus(200)
+	if _, err := io.WriteString(w, s); err != nil {
 		log.Println(err)
+		return nil
+	}
+
+	if us != "" {
+		log.Println("returned fudged mirrorlist " + us)
 	}
 
 	return nil
