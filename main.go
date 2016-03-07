@@ -97,6 +97,7 @@ func main() {
 
 				stat, err := os.Stat(local_path)
 				if err == nil {
+					log.Println(":-)")
 					fh, err := os.Open(local_path)
 					if err != nil {
 						return err
@@ -153,15 +154,16 @@ func main() {
 			}
 
 			for k, vs := range resp.Header {
+				if k == "Accept-Ranges" {
+					continue
+				}
 				for _, v := range vs {
-					fmt.Printf("proxy back header %#v\t%#v\n", k, v)
+					//fmt.Printf("proxy back header %#v\t%#v\n", k, v)
 					w.Header().Add(k, v)
 				}
 			}
 
 			w.Header().Set("Server", "remirror")
-			w.Header().Set("Content-Length", strconv.Itoa(int(resp.ContentLength)))
-
 			w.WriteHeader(resp.StatusCode)
 
 			n, err := io.Copy(out, resp.Body)
@@ -183,6 +185,7 @@ func main() {
 					log.Println(err)
 					return nil
 				}
+				log.Println(">:)")
 			}
 
 			return nil
@@ -225,7 +228,7 @@ func centos_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host 
 		return nil
 	}
 
-	log.Println("returned fudged mirrorlist " + us)
+	log.Println("===", us)
 	return nil
 }
 
@@ -239,19 +242,14 @@ func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host 
 	repo := r.Form.Get("repo")
 	arch := r.Form.Get("arch")
 
-	upstream := "mirrors.fedoraproject.org"
-	addr, err := resolve(upstream, dns_server)
+	upstream := "https://mirrors.fedoraproject.org" + r.RequestURI
+
+	log.Println("---", upstream)
+
+	req, err := http.NewRequest("GET", upstream, nil)
 	if err != nil {
 		return err
 	}
-
-	log.Println("-->", "http://"+upstream+r.RequestURI)
-
-	req, err := http.NewRequest("GET", "http://"+addr+r.RequestURI, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Host", upstream)
 
 	resp, err := http_client.Do(req)
 	if err != nil {
@@ -272,11 +270,16 @@ func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host 
 
 	start := strings.Index(s, `<resources maxconnections="1">`)
 	end := strings.Index(s, `</resources>`)
+
 	us := ""
 
 	if start != -1 && end != -1 && repo == "epel-7" {
-		us = `<url protocol="http" type="http" location="US" preference="100">http://` + host + `/fedora-epel/7/` + arch + `/repodata/repomd.xml</url>`
-		s = s[:start] + us + s[end:]
+		us = `http://` + host + `/fedora-epel/7/` + arch + `/repodata/repomd.xml`
+		s = s[:start] +
+			`<resources maxconnections="1"><url protocol="http" type="http" location="US" preference="100">` +
+			us +
+			`</url>` +
+			s[end:]
 	}
 
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
@@ -288,24 +291,7 @@ func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host 
 	}
 
 	if us != "" {
-		log.Println("returned fudged mirrorlist " + us)
+		log.Println("===", us)
 	}
-
 	return nil
-}
-
-func resolve(host, dns_server string) (string, error) {
-	m := dns.Msg{}
-	m.SetQuestion(host+".", dns.TypeA)
-	dnsr, _, err := dns_client.Exchange(&m, dns_server+":53")
-	if err != nil {
-		return "", err
-	}
-	for _, ans := range dnsr.Answer {
-		a, a_ok := ans.(*dns.A)
-		if a_ok {
-			return a.String(), nil
-		}
-	}
-	return "", fmt.Errorf("Server not found (%#v, queried DNS server %#v)", host, dns_server)
 }
