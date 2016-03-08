@@ -97,7 +97,6 @@ func main() {
 
 				_, err := os.Stat(local_path)
 				if err == nil {
-					log.Println("$$$")
 					fileserver.ServeHTTP(w, r)
 					return nil
 				}
