@@ -45,18 +45,18 @@ func should_cache(path string) bool {
 func main() {
 
 	var (
-		listen     string
-		dns_server string
-		data       string
-		host       string
+		listen string
+		data   string
+		host   string
 	)
 
 	flag.StringVar(&listen, "listen", ":80", "HTTP listen address")
-	flag.StringVar(&dns_server, "dns", "8.8.8.8", "DNS server to use for man in the middle mirrorlist interception")
 	flag.StringVar(&data, "data", "/var/remirror", "Data storage path (data in here is public)")
 	flag.StringVar(&host, "host", "9ex-dc-mirror", "This hosts name, so we can return a mirrorlist with ourselves")
 
 	flag.Parse()
+
+	fileserver := http.FileServer(http.Dir(data))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 
@@ -66,10 +66,10 @@ func main() {
 
 			// Some special sauce mirrorlist handlers that will point to ourselves
 			if r.Host == "mirrors.fedoraproject.org" {
-				return fedora_mirrorlist(w, r, dns_server, host)
+				return fedora_mirrorlist(w, r, host)
 			}
 			if r.Host == "mirrorlist.centos.org" {
-				return centos_mirrorlist(w, r, dns_server, host)
+				return centos_mirrorlist(w, r, host)
 			}
 
 			// Now we guess the upstream from the URL
@@ -95,21 +95,10 @@ func main() {
 			if should_cache(r.URL.Path) {
 				local_path = data + path.Clean(r.URL.Path)
 
-				stat, err := os.Stat(local_path)
+				_, err := os.Stat(local_path)
 				if err == nil {
-					log.Println(":-)")
-					fh, err := os.Open(local_path)
-					if err != nil {
-						return err
-					}
-					defer fh.Close()
-
-					w.Header().Set("Content-Length", strconv.Itoa(int(stat.Size())))
-					w.Header().Set("Server", "remirror")
-					_, err = io.Copy(w, fh)
-					if err != nil {
-						log.Println(err)
-					}
+					log.Println("$$$")
+					fileserver.ServeHTTP(w, r)
 					return nil
 				}
 			}
@@ -205,7 +194,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(listen, nil))
 }
 
-func centos_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host string) error {
+func centos_mirrorlist(w http.ResponseWriter, r *http.Request, host string) error {
 	err := r.ParseForm()
 	if err != nil {
 		return err
@@ -232,7 +221,7 @@ func centos_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host 
 	return nil
 }
 
-func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, dns_server, host string) error {
+func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, host string) error {
 
 	err := r.ParseForm()
 	if err != nil {
