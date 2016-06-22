@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/miekg/dns"
 	"io"
 	"io/ioutil"
 	"log"
@@ -16,7 +15,6 @@ import (
 
 var (
 	http_client = http.Client{}
-	dns_client  = dns.Client{}
 )
 
 type HTTPError int
