@@ -82,7 +82,7 @@ func main() {
 			} else if strings.HasPrefix(r.URL.Path, "/fedora-epel/") {
 				upstream = "https://mirrors.xmission.com"
 			} else if strings.HasPrefix(r.URL.Path, "/experticity/") {
-				upstream = "http://yumrepo.internal.experticity.com"
+				upstream = "http://yum"
 			}
 
 			if upstream == "" {
