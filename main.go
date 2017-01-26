@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"strconv"
 	"strings"
 )
 
@@ -17,13 +16,13 @@ var (
 	http_client = http.Client{}
 )
 
-type HTTPError int
-
-func (e HTTPError) Error() string {
-	return fmt.Sprintf("HTTP %d %s", e, http.StatusText(e.Code()))
-}
-func (e HTTPError) Code() int {
-	return int(e)
+var mirrors = map[string]string{
+	"/archlinux/":   "https://mirrors.kernel.org",
+	"/centos/":      "https://mirrors.xmission.com",
+	"/fedora/":      "https://mirrors.xmission.com",
+	"/fedora-epel/": "https://mirrors.xmission.com",
+	"/experticity/": "http://yum",
+	"/java/":        "http://yum",
 }
 
 func should_cache(path string) bool {
@@ -31,6 +30,9 @@ func should_cache(path string) bool {
 		return true
 	}
 	if strings.HasSuffix(path, ".rpm") {
+		return true
+	}
+	if strings.HasSuffix(path, "-rpm.bin") {
 		return true
 	}
 	if strings.Contains(path, "/repodata/") && (strings.HasSuffix(path, ".gz") ||
@@ -45,12 +47,10 @@ func main() {
 	var (
 		listen string
 		data   string
-		host   string
 	)
 
 	flag.StringVar(&listen, "listen", ":80", "HTTP listen address")
 	flag.StringVar(&data, "data", "/var/remirror", "Data storage path (data in here is public)")
-	flag.StringVar(&host, "host", "9ex-dc-mirror", "This hosts name, so we can return a mirrorlist with ourselves")
 
 	flag.Parse()
 
@@ -62,27 +62,12 @@ func main() {
 
 		err := func() error {
 
-			// Some special sauce mirrorlist handlers that will point to ourselves
-			if r.Host == "mirrors.fedoraproject.org" {
-				return fedora_mirrorlist(w, r, host)
-			}
-			if r.Host == "mirrorlist.centos.org" {
-				return centos_mirrorlist(w, r, host)
-			}
-
-			// Now we guess the upstream from the URL
 			upstream := ""
 
-			if strings.HasPrefix(r.URL.Path, "/archlinux/") {
-				upstream = "https://mirrors.xmission.com"
-			} else if strings.HasPrefix(r.URL.Path, "/centos/") {
-				upstream = "https://mirrors.xmission.com"
-			} else if strings.HasPrefix(r.URL.Path, "/fedora/") {
-				upstream = "https://mirrors.xmission.com"
-			} else if strings.HasPrefix(r.URL.Path, "/fedora-epel/") {
-				upstream = "https://mirrors.xmission.com"
-			} else if strings.HasPrefix(r.URL.Path, "/experticity/") {
-				upstream = "http://yum"
+			for prefix, mirror := range mirrors {
+				if strings.HasPrefix(r.URL.Path, prefix) {
+					upstream = mirror
+				}
 			}
 
 			if upstream == "" {
@@ -110,7 +95,7 @@ func main() {
 			}
 
 			for k, vs := range r.Header {
-				if k != "Host" {
+				if !hopHeaders[k] {
 					for _, v := range vs {
 						req.Header.Add(k, v)
 					}
@@ -161,7 +146,10 @@ func main() {
 			}
 
 			if n != resp.ContentLength {
-				log.Printf("Short data returned from server (Content-Length %d received %d)\n", resp.ContentLength, n)
+				if resp.ContentLength != -1 {
+					log.Printf("Short data returned from server (Content-Length %d received %d)\n", resp.ContentLength, n)
+				}
+				// Not really an HTTP error, leave it up to the client
 				return nil
 			}
 
@@ -189,97 +177,6 @@ func main() {
 		}
 	})
 
-	log.Println("arch/fedora/centos mirror proxy listening on HTTP " + listen)
+	log.Println("arch/fedora/centos/experticity mirror proxy listening on HTTP " + listen)
 	log.Fatal(http.ListenAndServe(listen, nil))
-}
-
-func centos_mirrorlist(w http.ResponseWriter, r *http.Request, host string) error {
-	err := r.ParseForm()
-	if err != nil {
-		return err
-	}
-
-	release := r.Form.Get("release")
-	repo := r.Form.Get("repo")
-	arch := r.Form.Get("arch")
-
-	if release == "7" {
-		release = "7.2.1511"
-	}
-
-	w.Header().Set("Content-Type", "text/plain")
-
-	us := "http://" + host + "/centos/" + release + "/" + repo + "/" + arch + "/"
-
-	if _, err := io.WriteString(w, us); err != nil {
-		log.Println(err)
-		return nil
-	}
-
-	log.Println("===", us)
-	return nil
-}
-
-func fedora_mirrorlist(w http.ResponseWriter, r *http.Request, host string) error {
-
-	err := r.ParseForm()
-	if err != nil {
-		return err
-	}
-
-	repo := r.Form.Get("repo")
-	arch := r.Form.Get("arch")
-
-	upstream := "https://mirrors.fedoraproject.org" + r.RequestURI
-
-	log.Println("---", upstream)
-
-	req, err := http.NewRequest("GET", upstream, nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := http_client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return HTTPError(resp.StatusCode)
-	}
-
-	tmp, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	s := string(tmp)
-
-	start := strings.Index(s, `<resources maxconnections="1">`)
-	end := strings.Index(s, `</resources>`)
-
-	us := ""
-
-	if start != -1 && end != -1 && repo == "epel-7" {
-		us = `http://` + host + `/fedora-epel/7/` + arch + `/repodata/repomd.xml`
-		s = s[:start] +
-			`<resources maxconnections="1"><url protocol="http" type="http" location="US" preference="100">` +
-			us +
-			`</url>` +
-			s[end:]
-	}
-
-	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
-	w.Header().Set("Content-Length", strconv.Itoa(len(s)))
-	w.WriteHeader(200)
-	if _, err := io.WriteString(w, s); err != nil {
-		log.Println(err)
-		return nil
-	}
-
-	if us != "" {
-		log.Println("===", us)
-	}
-	return nil
 }
