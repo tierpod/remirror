@@ -29,6 +29,9 @@ func should_cache(path string) bool {
 	if strings.HasSuffix(path, ".pkg.tar.xz") {
 		return true
 	}
+	if strings.HasSuffix(path, ".linux-amd64.tar.gz") {
+		return true
+	}
 	if strings.HasSuffix(path, ".rpm") {
 		return true
 	}
