@@ -23,6 +23,7 @@ var mirrors = map[string]string{
 	"/fedora-epel/": "https://mirrors.xmission.com",
 	"/experticity/": "http://yum",
 	"/java/":        "http://yum",
+	"/golang/":      "https://storage.googleapis.com",
 }
 
 func should_cache(path string) bool {
