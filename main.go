@@ -24,6 +24,7 @@ var mirrors = map[string]string{
 	"/experticity/": "http://yum",
 	"/java/":        "http://yum",
 	"/golang/":      "https://storage.googleapis.com",
+	"/misc/":        "http://yum",
 }
 
 func should_cache(path string) bool {
