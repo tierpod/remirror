@@ -28,20 +28,27 @@ var mirrors = map[string]string{
 }
 
 func should_cache(path string) bool {
-	if strings.HasSuffix(path, ".pkg.tar.xz") {
-		return true
+	// Arch has some DB files we don't want to cache even though
+	// they have archive suffixes. So we're a little more strict here.
+	if strings.HasPrefix(path, "/archlinux/") {
+		if strings.HasSuffix(path, ".pkg.tar.xz") {
+			return true
+		}
+		if strings.HasSuffix(path, ".pkg.tar.xz.sig") {
+			return true
+		}
+		return false
 	}
-	if strings.HasSuffix(path, ".linux-amd64.tar.gz") {
-		return true
-	}
-	if strings.HasSuffix(path, ".rpm") {
-		return true
-	}
-	if strings.HasSuffix(path, "-rpm.bin") {
-		return true
-	}
-	if strings.Contains(path, "/repodata/") && (strings.HasSuffix(path, ".gz") ||
-		strings.HasSuffix(path, ".bz2") || strings.HasSuffix(path, ".xz")) {
+
+	// Otherwise cache everything that looks like an archive.
+	if strings.HasSuffix(path, ".xz") ||
+		strings.HasSuffix(path, ".gz") ||
+		strings.HasSuffix(path, ".bz2") ||
+		strings.HasSuffix(path, ".zip") ||
+		strings.HasSuffix(path, ".tgz") ||
+		strings.HasSuffix(path, ".rpm") ||
+		strings.HasSuffix(path, "-rpm.bin") ||
+		strings.HasSuffix(path, ".xz.sig") {
 		return true
 	}
 	return false
