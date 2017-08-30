@@ -4,7 +4,7 @@ Release:     %{_release}
 Summary:     Experticity local proxy/mirror
 Group:       Vendor/Experticity
 License:     Proprietary
-BuildArch:   noarch
+BuildArch:   x86_64
 
 # no source rpms
 %define __os_install_post %{nil}
