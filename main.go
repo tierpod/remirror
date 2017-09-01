@@ -26,6 +26,12 @@ var mirrors = map[string]string{
 	"/golang/":      "https://storage.googleapis.com",
 	"/misc/":        "http://yum",
 	"/linux/chrome": "http://dl.google.com",
+
+	// These mariadb ones are super crappy... likely to collide with something.
+	// It's too bad they didn't do a nice URL prefix.
+	"/5.5/centos7-amd64":  "http://yum.mariadb.org",
+	"/10.2/centos7-amd64": "http://yum.mariadb.org",
+	"/10.3/centos7-amd64": "http://yum.mariadb.org",
 }
 
 func should_cache(path string) bool {
