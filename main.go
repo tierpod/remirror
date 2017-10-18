@@ -10,11 +10,24 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
+	"time"
 )
 
 var (
 	http_client = http.Client{}
+
+	downloads_mu sync.Mutex
+	downloads    = map[string]*Download{}
 )
+
+type Download struct {
+	resp *http.Response
+
+	tmp_path string
+	tmp_size int64
+	tmp_done chan struct{} // will be closed when download is done and final bytes written
+}
 
 var mirrors = map[string]string{
 	"/archlinux/":   "https://mirrors.kernel.org",
@@ -68,7 +81,7 @@ func main() {
 		data   string
 	)
 
-	flag.StringVar(&listen, "listen", ":80", "HTTP listen address")
+	flag.StringVar(&listen, "listen", ":8084", "HTTP listen address")
 	flag.StringVar(&data, "data", "/var/remirror", "Data storage path (data in here is public)")
 
 	flag.Parse()
@@ -106,10 +119,29 @@ func main() {
 				}
 			}
 
+			downloads_mu.Lock()
+
+			download, ok := downloads[local_path]
+			if ok {
+				fh, err := os.Open(download.tmp_path)
+				downloads_mu.Unlock()
+				if err != nil {
+					return err
+				}
+				return tmp_download(local_path, w, download, fh)
+			}
+			// downloads_mu is still locked. take care.
+			// we need to keep it locked until we have
+			// registered a download, opened a temp file,
+			// and saved it's path into the tmp_path in
+			// the struct.
+			// then we need to make sure to release.
+
 			log.Println("-->", upstream+r.RequestURI)
 
 			req, err := http.NewRequest("GET", upstream+r.RequestURI, nil)
 			if err != nil {
+				downloads_mu.Unlock()
 				return err
 			}
 
@@ -123,6 +155,7 @@ func main() {
 
 			resp, err := http_client.Do(req)
 			if err != nil {
+				downloads_mu.Unlock()
 				return err
 			}
 			defer resp.Body.Close()
@@ -131,11 +164,15 @@ func main() {
 
 			tmp_path := ""
 
+			var tmp_needs_final_close io.Closer
+
 			if resp.StatusCode == 200 && local_path != "" {
 				tmp, err := ioutil.TempFile(data, "remirror_tmp_")
 				if err != nil {
+					downloads_mu.Unlock()
 					return err
 				}
+				tmp_needs_final_close = tmp
 				tmp_path = tmp.Name()
 				//fmt.Println("tmp", tmp_path)
 
@@ -143,20 +180,53 @@ func main() {
 				defer os.Remove(tmp_path)
 
 				out = io.MultiWriter(out, tmp)
-			}
 
-			for k, vs := range resp.Header {
-				if k == "Accept-Ranges" {
-					continue
-				}
-				for _, v := range vs {
-					//fmt.Printf("proxy back header %#v\t%#v\n", k, v)
-					w.Header().Add(k, v)
+				// don't use concurrent download struct if the response
+				// doesn't have a clear content length. it's too hard
+				// to tell in the other goroutines when the tmp_file reads
+				// should be "done".
+				if resp.ContentLength > 0 {
+					// at this point we have a "successful" download in
+					// progress. save into the struct.
+					download = &Download{
+						resp:     resp,
+						tmp_path: tmp_path,
+						tmp_size: resp.ContentLength,
+						tmp_done: make(chan struct{}),
+					}
+					downloads[local_path] = download
 				}
 			}
+			// release the mutex. if we have a successful download in
+			// progress, we have stored it correctly so far. if not,
+			// we unlock, leaving the download struct unmodified. the
+			// next request to try that URL will retry.
+			downloads_mu.Unlock()
 
-			w.Header().Set("Server", "remirror")
-			w.WriteHeader(resp.StatusCode)
+			// however we quit, we want to clear the download in progress
+			// entry. this deferred func should run before the deferred
+			// cleanup funcs above, so the filehandle should still be
+			// valid when we clear it out.
+			defer func() {
+				if download == nil {
+					// we didn't end up using the map for some reason.
+					// (maybe empty content length, non 200 response, etc)
+					return
+				}
+
+				// make sure final close has been called. things might still
+				// be writing, and we need that to be done before
+				// we close tmp_done
+				_ = tmp_needs_final_close.Close()
+
+				close(download.tmp_done)
+
+				downloads_mu.Lock()
+				delete(downloads, local_path)
+				downloads_mu.Unlock()
+			}()
+
+			write_resp_headers(w, resp)
 
 			n, err := io.Copy(out, resp.Body)
 			if err != nil {
@@ -168,13 +238,19 @@ func main() {
 				if resp.ContentLength != -1 {
 					log.Printf("Short data returned from server (Content-Length %d received %d)\n", resp.ContentLength, n)
 				}
-				// Not really an HTTP error, leave it up to the client
+				// Not really an HTTP error, leave it up to the client.
+				// but we aren't going to save our response to the cache.
 				return nil
 			}
 
 			if tmp_path != "" {
 				os.MkdirAll(path.Dir(local_path), 0755)
 
+				err = tmp_needs_final_close.Close()
+				if err != nil {
+					log.Println(err)
+					return nil
+				}
 				err = os.Rename(tmp_path, local_path)
 				if err != nil {
 					log.Println(err)
@@ -198,4 +274,79 @@ func main() {
 
 	log.Println("arch/fedora/centos/experticity mirror proxy listening on HTTP " + listen)
 	log.Fatal(http.ListenAndServe(listen, nil))
+}
+
+func write_resp_headers(w http.ResponseWriter, resp *http.Response) {
+
+	for k, vs := range resp.Header {
+		if k == "Accept-Ranges" {
+			continue
+		}
+		for _, v := range vs {
+			//fmt.Printf("proxy back header %#v\t%#v\n", k, v)
+			w.Header().Add(k, v)
+		}
+	}
+
+	w.Header().Set("Server", "remirror")
+	w.WriteHeader(resp.StatusCode)
+}
+
+// return a download in progress started by another request
+func tmp_download(local_path string, w http.ResponseWriter, download *Download, tmp io.ReadCloser) error {
+	defer tmp.Close()
+
+	write_resp_headers(w, download.resp)
+
+	written := int64(0)
+	done := false
+	last := time.Now()
+
+	for {
+		n, err := io.Copy(w, tmp)
+
+		if n < 0 {
+			panic(fmt.Sprintf("io.Copy returned n %d: Not what I expected!", n))
+		}
+
+		written += n
+
+		if err != nil && err != io.EOF {
+			log.Printf("Error while reading concurrent download %#s from %#s: %v\n",
+				local_path, download.tmp_path, err)
+			// Not an HTTP error: just return, and the client will hopefully
+			// handle a short read correctly.
+			return nil
+		}
+
+		if n > 0 {
+			// cool, try another copy. hopefully the file
+			// has more bytes now
+			last = time.Now()
+			continue
+		}
+
+		if done {
+			return nil
+		}
+
+		// sleep for a bit so the other download has a chance to write
+		// more bytes.
+		select {
+		case <-time.After(time.Second):
+			// 60 second timeout for the other goroutine to at least write _something_
+			if time.Since(last) > time.Minute {
+				log.Println("Timeout while reading concurrent download %#s from %#s\n",
+					local_path,
+					download.tmp_path)
+				// Not an HTTP error: just return, and the client will hopefully
+				// handle a short read correctly.
+				return nil
+			}
+			continue
+		case <-download.tmp_done:
+			done = true
+			continue
+		}
+	}
 }
