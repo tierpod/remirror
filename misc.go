@@ -17,11 +17,6 @@ var hopHeaders = map[string]bool{
 	"Trailer":           true,
 	"Transfer-Encoding": true,
 	"Upgrade":           true,
-
-	// We don't want to do range requests. Instead the server will return with
-	// 200 and the full content, if we skip it. That's better so we can cache
-	// the response.
-	"Range": true,
 }
 
 type HTTPError int

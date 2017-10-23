@@ -119,17 +119,23 @@ func main() {
 				}
 			}
 
+			var download *Download
+			var ok bool
+
 			downloads_mu.Lock()
 
-			download, ok := downloads[local_path]
-			if ok {
-				fh, err := os.Open(download.tmp_path)
-				downloads_mu.Unlock()
-				if err != nil {
-					return err
+			if r.Header.Get("Range") == "" && local_path != "" {
+				download, ok = downloads[local_path]
+				if ok {
+					fh, err := os.Open(download.tmp_path)
+					downloads_mu.Unlock()
+					if err != nil {
+						return err
+					}
+					return tmp_download(local_path, w, download, fh)
 				}
-				return tmp_download(local_path, w, download, fh)
 			}
+
 			// downloads_mu is still locked. take care.
 			// we need to keep it locked until we have
 			// registered a download, opened a temp file,
@@ -166,6 +172,8 @@ func main() {
 
 			var tmp_needs_final_close io.Closer
 
+			// We don't want to cache the result if the server
+			// returns with a 206.
 			if resp.StatusCode == 200 && local_path != "" {
 				tmp, err := ioutil.TempFile(data, "remirror_tmp_")
 				if err != nil {
