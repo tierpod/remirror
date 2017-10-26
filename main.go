@@ -34,10 +34,10 @@ var mirrors = map[string]string{
 	"/centos/":      "https://mirrors.xmission.com",
 	"/fedora/":      "https://mirrors.xmission.com",
 	"/fedora-epel/": "https://mirrors.xmission.com",
-	"/experticity/": "http://easybutton.dev.experticity.com",
-	"/java/":        "http://easybutton.dev.experticity.com",
+	"/experticity/": "http://yum.dev.experticity.com",
+	"/java/":        "http://yum.dev.experticity.com",
 	"/golang/":      "https://storage.googleapis.com",
-	"/misc/":        "http://easybutton.dev.experticity.com",
+	"/misc/":        "http://yum.dev.experticity.com",
 	"/linux/chrome": "http://dl.google.com",
 
 	// These mariadb ones are super crappy... likely to collide with something.
