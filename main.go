@@ -79,12 +79,19 @@ func main() {
 	var (
 		listen string
 		data   string
+		localyum string
 	)
 
 	flag.StringVar(&listen, "listen", ":8084", "HTTP listen address")
 	flag.StringVar(&data, "data", "/var/remirror", "Data storage path (data in here is public)")
+	flag.StringVar(&localyum, "localyum", "", "Path to local experticity yum repo for /experticity/")
 
 	flag.Parse()
+
+	if localyum != "" {
+		http.Handle("/experticity/",
+			http.FileServer(http.Dir(localyum)))
+	}
 
 	fileserver := http.FileServer(http.Dir(data))
 
