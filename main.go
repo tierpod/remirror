@@ -266,6 +266,16 @@ func main() {
 					log.Println(err)
 					return nil
 				}
+
+				// clear from struct before renaming
+				if download != nil {
+					close(download.tmp_done)
+					downloads_mu.Lock()
+					delete(downloads, local_path)
+					downloads_mu.Unlock()
+					download = nil // so we don't re-close
+				}
+
 				err = os.Rename(tmp_path, local_path)
 				if err != nil {
 					log.Println(err)
