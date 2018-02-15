@@ -40,6 +40,9 @@ var mirrors = map[string]string{
 	"/misc/":        "http://yum.dev.experticity.com",
 	"/linux/chrome": "http://dl.google.com",
 
+	// caching maxwell tar for building maxwell exp rpm.
+	"/maxwell/":  "https://github.com/zendesk/",
+
 	// These mariadb ones are super crappy... likely to collide with something.
 	// It's too bad they didn't do a nice URL prefix.
 	"/5.5/centos7-amd64":  "http://yum.mariadb.org",
