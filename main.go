@@ -25,7 +25,6 @@ type Download struct {
 	resp *http.Response
 
 	tmp_path string
-	tmp_size int64
 	tmp_done chan struct{} // will be closed when download is done and final bytes written
 }
 
@@ -79,8 +78,8 @@ func should_cache(path string) bool {
 func main() {
 
 	var (
-		listen string
-		data   string
+		listen   string
+		data     string
 		localyum string
 	)
 
@@ -198,21 +197,14 @@ func main() {
 
 				out = io.MultiWriter(out, tmp)
 
-				// don't use concurrent download struct if the response
-				// doesn't have a clear content length. it's too hard
-				// to tell in the other goroutines when the tmp_file reads
-				// should be "done".
-				if resp.ContentLength > 0 {
-					// at this point we have a "successful" download in
-					// progress. save into the struct.
-					download = &Download{
-						resp:     resp,
-						tmp_path: tmp_path,
-						tmp_size: resp.ContentLength,
-						tmp_done: make(chan struct{}),
-					}
-					downloads[local_path] = download
+				// at this point we have a "successful" download in
+				// progress. save into the struct.
+				download = &Download{
+					resp:     resp,
+					tmp_path: tmp_path,
+					tmp_done: make(chan struct{}),
 				}
+				downloads[local_path] = download
 			}
 			// release the mutex. if we have a successful download in
 			// progress, we have stored it correctly so far. if not,
@@ -251,10 +243,9 @@ func main() {
 				return nil
 			}
 
-			if n != resp.ContentLength {
-				if resp.ContentLength != -1 {
-					log.Printf("Short data returned from server (Content-Length %d received %d)\n", resp.ContentLength, n)
-				}
+			if n != resp.ContentLength && resp.ContentLength != -1 {
+				log.Printf("Short data returned from server (Content-Length %d received %d)\n", resp.ContentLength, n)
+
 				// Not really an HTTP error, leave it up to the client.
 				// but we aren't going to save our response to the cache.
 				return nil
