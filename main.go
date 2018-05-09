@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -12,7 +11,21 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hashicorp/hcl"
 )
+
+type Config struct {
+	Listen  string // HTTP listen address. ":8084"
+	Data    string // Storage location for cached files. "/var/remirror"
+	Mirrors []Mirror
+}
+type Mirror struct {
+	Prefix   string // URL prefix "/archlinux/"
+	Upstream string // "https://mirrors.kernel.org"
+	Path     string // If specified, overrides upstream path
+	Local    string // Local path for locally served things "/yumrepo/blah"
+}
 
 var (
 	http_client = http.Client{}
@@ -26,26 +39,6 @@ type Download struct {
 
 	tmp_path string
 	tmp_done chan struct{} // will be closed when download is done and final bytes written
-}
-
-var mirrors = map[string]string{
-	"/archlinux/":   "https://mirrors.kernel.org",
-	"/centos/":      "https://mirrors.xmission.com",
-	"/fedora/":      "https://mirrors.xmission.com",
-	"/fedora-epel/": "https://mirrors.xmission.com",
-	"/experticity/": "http://yum.dev.experticity.com",
-	"/java/":        "http://yum.dev.experticity.com",
-	"/golang/":      "https://storage.googleapis.com",
-	"/misc/":        "http://yum.dev.experticity.com",
-	"/linux/chrome": "http://dl.google.com",
-	"/maxwell/":     "https://github.com/zendesk",
-
-	// These are super crappy... likely to collide with something.
-	// It's too bad they didn't do a nice URL prefix.
-	"/5.5/centos7-amd64":  "http://yum.mariadb.org",
-	"/10.2/centos7-amd64": "http://yum.mariadb.org",
-	"/10.3/centos7-amd64": "http://yum.mariadb.org",
-	"/community-server/":  "https://download.dremio.com",
 }
 
 func should_cache(path string) bool {
@@ -75,45 +68,19 @@ func should_cache(path string) bool {
 	return false
 }
 
-func main() {
-
-	var (
-		listen   string
-		data     string
-		localyum string
-	)
-
-	flag.StringVar(&listen, "listen", ":8084", "HTTP listen address")
-	flag.StringVar(&data, "data", "/var/remirror", "Data storage path (data in here is public)")
-	flag.StringVar(&localyum, "localyum", "", "Path to local experticity yum repo for /experticity/")
-
-	flag.Parse()
-
-	if localyum != "" {
-		http.Handle("/experticity/",
-			http.FileServer(http.Dir(localyum)))
+func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) http.Handler {
+	if mirror.Local != "" {
+		// TODO: make this respect mirror.Path
+		return http.FileServer(http.Dir(mirror.Local))
 	}
 
-	fileserver := http.FileServer(http.Dir(data))
+	data := config.Data
+	upstream := mirror.Upstream
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Println(r.Method + " http://" + r.Host + r.RequestURI)
 
 		err := func() error {
-
-			upstream := ""
-
-			for prefix, mirror := range mirrors {
-				if strings.HasPrefix(r.URL.Path, prefix) {
-					upstream = mirror
-				}
-			}
-
-			if upstream == "" {
-				fmt.Println("no upstream found for url", r.URL.Path)
-				return HTTPError(404)
-			}
 
 			local_path := ""
 
@@ -289,9 +256,28 @@ func main() {
 			fmt.Println("\t\t500 " + err.Error())
 		}
 	})
+}
 
-	log.Println("arch/fedora/centos/experticity mirror proxy listening on HTTP " + listen)
-	log.Fatal(http.ListenAndServe(listen, nil))
+func main() {
+	config := &Config{}
+
+	config_bytes, err := ioutil.ReadFile("remirror.hcl")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := hcl.Unmarshal(config_bytes, config); err != nil {
+		log.Fatal(err)
+	}
+
+	fileserver := http.FileServer(http.Dir(config.Data))
+
+	for _, mirror := range config.Mirrors {
+		http.Handle(mirror.Prefix, mirror.CreateHandler(config, fileserver))
+	}
+
+	log.Println("remirror listening on HTTP " + config.Listen)
+	log.Fatal(http.ListenAndServe(config.Listen, nil))
 }
 
 func write_resp_headers(w http.ResponseWriter, resp *http.Response) {
