@@ -69,13 +69,14 @@ func should_cache(path string) bool {
 }
 
 func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) http.Handler {
-	if mirror.Local != "" {
-		// TODO: make this respect mirror.Path
-		return http.FileServer(http.Dir(mirror.Local))
-	}
-
 	data := config.Data
 	upstream := mirror.Upstream
+	upstream_path := mirror.Path
+	prefix := mirror.Prefix
+
+	if mirror.Local != "" {
+		return http.StripPrefix(mirror.Prefix, http.FileServer(http.Dir(mirror.Local)))
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Println(r.Method + " http://" + r.Host + r.RequestURI)
@@ -83,9 +84,14 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) http
 		err := func() error {
 
 			local_path := ""
+			rpath := r.URL.Path
 
-			if should_cache(r.URL.Path) {
-				local_path = data + path.Clean(r.URL.Path)
+			if upstream_path != "" {
+				rpath = upstream_path + strings.TrimPrefix(rpath, prefix)
+			}
+
+			if should_cache(rpath) {
+				local_path = data + path.Clean(rpath)
 
 				_, err := os.Stat(local_path)
 				if err == nil {
@@ -118,9 +124,9 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) http
 			// the struct.
 			// then we need to make sure to release.
 
-			log.Println("-->", upstream+r.RequestURI)
+			log.Println("-->", upstream+rpath)
 
-			req, err := http.NewRequest("GET", upstream+r.RequestURI, nil)
+			req, err := http.NewRequest("GET", upstream+rpath, nil)
 			if err != nil {
 				downloads_mu.Unlock()
 				return err
@@ -276,7 +282,7 @@ func main() {
 		http.Handle(mirror.Prefix, mirror.CreateHandler(config, fileserver))
 	}
 
-	log.Println("remirror listening on HTTP " + config.Listen)
+	log.Println("remirror listening on HTTP", config.Listen, "with data cache", config.Data)
 	log.Fatal(http.ListenAndServe(config.Listen, nil))
 }
 
