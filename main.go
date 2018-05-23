@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -21,10 +22,31 @@ type Config struct {
 	Mirrors []Mirror
 }
 type Mirror struct {
-	Prefix   string // URL prefix "/archlinux/"
-	Upstream string // "https://mirrors.kernel.org"
-	Path     string // If specified, overrides upstream path
-	Local    string // Local path for locally served things "/yumrepo/blah"
+	// Prefix specifies a path that should be sent
+	// to a certain upstream. E.g. "/archlinux/"
+	Prefix string
+
+	// Upstream specifies the upstream protocol and host.
+	// You may also specify a path, in which case Prefix is
+	// stripped from the incoming request, and what is left is
+	// appended to the upstream path component.
+	//
+	// E.g. "https://mirrors.kernel.org"     (/archlinux/somepackage will be preserved)
+	// E.g. "http://mirror.cs.umn.edu/arch/" (/archlinux/thing will transform to /arch/thing)
+	Upstream string
+
+	// Local should be used instead of Upstream for a locally served folder.
+	// Incoming requests will have Prefix stripped off before being sent to Local.
+	// E.g. "/home/you/localrepos/archlinux"
+	Local string
+}
+
+func (m Mirror) String() string {
+	if m.Local != "" {
+		return m.Prefix + " » " + m.Local
+	} else {
+		return m.Prefix + " » " + m.Upstream
+	}
 }
 
 var (
@@ -68,14 +90,15 @@ func should_cache(path string) bool {
 	return false
 }
 
-func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) http.Handler {
-	data := config.Data
-	upstream := mirror.Upstream
-	upstream_path := mirror.Path
-	prefix := mirror.Prefix
+func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (http.Handler, error) {
 
 	if mirror.Local != "" {
-		return http.StripPrefix(mirror.Prefix, http.FileServer(http.Dir(mirror.Local)))
+		return http.StripPrefix(mirror.Prefix, http.FileServer(http.Dir(mirror.Local))), nil
+	}
+
+	upstream, err := url.Parse(mirror.Upstream)
+	if err != nil {
+		return nil, err
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,14 +107,16 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) http
 		err := func() error {
 
 			local_path := ""
-			rpath := r.URL.Path
+			remote_url := upstream.Scheme + "://" + upstream.Host
 
-			if upstream_path != "" {
-				rpath = upstream_path + strings.TrimPrefix(rpath, prefix)
+			if upstream.Path == "" {
+				remote_url += path.Clean(r.URL.Path)
+			} else {
+				remote_url += path.Clean(upstream.Path + "/" + strings.TrimPrefix(r.URL.Path, mirror.Prefix))
 			}
 
-			if should_cache(rpath) {
-				local_path = data + path.Clean(rpath)
+			if should_cache(remote_url) {
+				local_path = config.Data + path.Clean(r.URL.Path)
 
 				_, err := os.Stat(local_path)
 				if err == nil {
@@ -124,9 +149,9 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) http
 			// the struct.
 			// then we need to make sure to release.
 
-			log.Println("-->", upstream+rpath)
+			log.Println("-->", remote_url)
 
-			req, err := http.NewRequest("GET", upstream+rpath, nil)
+			req, err := http.NewRequest("GET", remote_url, nil)
 			if err != nil {
 				downloads_mu.Unlock()
 				return err
@@ -156,7 +181,7 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) http
 			// We don't want to cache the result if the server
 			// returns with a 206.
 			if resp.StatusCode == 200 && local_path != "" {
-				tmp, err := ioutil.TempFile(data, "remirror_tmp_")
+				tmp, err := ioutil.TempFile(config.Data, "remirror_tmp_")
 				if err != nil {
 					downloads_mu.Unlock()
 					return err
@@ -261,7 +286,7 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) http
 			http.Error(w, err.Error(), 500)
 			fmt.Println("\t\t500 " + err.Error())
 		}
-	})
+	}), nil
 }
 
 func main() {
@@ -279,7 +304,13 @@ func main() {
 	fileserver := http.FileServer(http.Dir(config.Data))
 
 	for _, mirror := range config.Mirrors {
-		http.Handle(mirror.Prefix, mirror.CreateHandler(config, fileserver))
+		handler, err := mirror.CreateHandler(config, fileserver)
+		if err == nil {
+			log.Println(mirror, " ✓ ")
+			http.Handle(mirror.Prefix, handler)
+		} else {
+			log.Println(mirror, " ✗ Error:", err)
+		}
 	}
 
 	log.Println("remirror listening on HTTP", config.Listen, "with data cache", config.Data)
