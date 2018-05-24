@@ -42,11 +42,11 @@ type Mirror struct {
 }
 
 func (m Mirror) String() string {
+	s := m.Upstream
 	if m.Local != "" {
-		return m.Prefix + " » " + m.Local
-	} else {
-		return m.Prefix + " » " + m.Upstream
+		s = m.Local
 	}
+	return fmt.Sprintf("%-20s » %s", m.Prefix, s)
 }
 
 var (
@@ -289,16 +289,36 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 	}), nil
 }
 
+func load_configs(config *Config) error {
+	try := []string{"remirror.hcl"}
+	home := os.Getenv("HOME")
+	if home != "" {
+		try = append(try, home+"/.remirror.hcl")
+	}
+	try = append(try, "/etc/remirror.hcl")
+
+	for _, t := range try {
+		_, err := os.Stat(t)
+		if err == nil {
+			log.Printf("Loading configuration from %#v ...\n", t)
+			config_bytes, err := ioutil.ReadFile(t)
+			if err != nil {
+				return err
+			}
+			if err := hcl.Unmarshal(config_bytes, config); err != nil {
+				return err
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("No files found: Create one of %s", strings.Join(try, ", "))
+}
+
 func main() {
 	config := &Config{}
 
-	config_bytes, err := ioutil.ReadFile("remirror.hcl")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := hcl.Unmarshal(config_bytes, config); err != nil {
-		log.Fatal(err)
+	if err := load_configs(config); err != nil {
+		log.Fatalf("Config error: %v", err)
 	}
 
 	fileserver := http.FileServer(http.Dir(config.Data))
