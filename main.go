@@ -39,6 +39,14 @@ type Mirror struct {
 	// Incoming requests will have Prefix stripped off before being sent to Local.
 	// E.g. "/home/you/localrepos/archlinux"
 	Local string
+
+	// If nil, default match set will be used
+	Matches []Match
+}
+type Match struct {
+	Fail   bool
+	Prefix string
+	Suffix string
 }
 
 func (m Mirror) String() string {
@@ -63,7 +71,21 @@ type Download struct {
 	tmp_done chan struct{} // will be closed when download is done and final bytes written
 }
 
-func should_cache(path string) bool {
+func (mirror Mirror) should_cache(path string) bool {
+	// Use custom match rules?
+	if len(mirror.Matches) > 0 {
+		for _, m := range mirror.Matches {
+			if !strings.HasPrefix(path, m.Prefix) {
+				return false
+			}
+			if !strings.HasSuffix(path, m.Suffix) {
+				return false
+			}
+			return true
+		}
+		return false
+	}
+
 	// Arch has some DB files we don't want to cache even though
 	// they have archive suffixes. So we're a little more strict here.
 	if strings.HasPrefix(path, "/archlinux/") {
@@ -115,7 +137,7 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 				remote_url += path.Clean(upstream.Path + "/" + strings.TrimPrefix(r.URL.Path, mirror.Prefix))
 			}
 
-			if should_cache(remote_url) {
+			if mirror.should_cache(remote_url) {
 				local_path = config.Data + path.Clean(r.URL.Path)
 
 				_, err := os.Stat(local_path)
