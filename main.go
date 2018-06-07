@@ -49,12 +49,23 @@ type Match struct {
 	Suffix string
 }
 
-func (m Mirror) String() string {
-	s := m.Upstream
-	if m.Local != "" {
-		s = m.Local
+func (mirror Mirror) String() string {
+	s := mirror.Upstream
+	if mirror.Local != "" {
+		s = mirror.Local
 	}
-	return fmt.Sprintf("%-20s » %s", m.Prefix, s)
+	s += " "
+	for i, m := range mirror.Matches {
+		ss := m.Prefix + "*" + m.Suffix
+		if m.Fail {
+			ss += " fail"
+		}
+		if i+1 < len(mirror.Matches) {
+			ss += ", "
+		}
+		s += ss
+	}
+	return fmt.Sprintf("%-20s » %s", mirror.Prefix, s)
 }
 
 var (
@@ -75,13 +86,10 @@ func (mirror Mirror) should_cache(path string) bool {
 	// Use custom match rules?
 	if len(mirror.Matches) > 0 {
 		for _, m := range mirror.Matches {
-			if !strings.HasPrefix(path, m.Prefix) {
-				return false
+			if strings.HasPrefix(path, m.Prefix) &&
+				strings.HasSuffix(path, m.Suffix) {
+				return !m.Fail
 			}
-			if !strings.HasSuffix(path, m.Suffix) {
-				return false
-			}
-			return true
 		}
 		return false
 	}
