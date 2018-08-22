@@ -35,6 +35,9 @@ type Mirror struct {
 	// E.g. "http://mirror.cs.umn.edu/arch/" (/archlinux/thing will transform to /arch/thing)
 	Upstream string
 
+	// Upstreams specifies multiple Upstream entries. You can specify both (all will be used).
+	Upstreams []string
+
 	// Local should be used instead of Upstream for a locally served folder.
 	// Incoming requests will have Prefix stripped off before being sent to Local.
 	// E.g. "/home/you/localrepos/archlinux"
@@ -50,9 +53,20 @@ type Match struct {
 }
 
 func (mirror Mirror) String() string {
-	s := mirror.Upstream
-	if mirror.Local != "" {
-		s = mirror.Local
+	s := mirror.Local
+	if s == "" {
+		count := 0
+		if mirror.Upstream != "" {
+			s = mirror.Upstream
+			count++
+		}
+		if s == "" && len(mirror.Upstreams) > 0 {
+			s = mirror.Upstreams[0]
+		}
+		count += len(mirror.Upstreams)
+		if count > 1 {
+			s += fmt.Sprintf(" (+ %d more...)", count-1)
+		}
 	}
 	s += " "
 	for i, m := range mirror.Matches {
@@ -126,9 +140,21 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 		return http.StripPrefix(mirror.Prefix, http.FileServer(http.Dir(mirror.Local))), nil
 	}
 
-	upstream, err := url.Parse(mirror.Upstream)
-	if err != nil {
-		return nil, err
+	upstreams := []*url.URL{}
+
+	if mirror.Upstream != "" {
+		upstream, err := url.Parse(mirror.Upstream)
+		if err != nil {
+			return nil, err
+		}
+		upstreams = append(upstreams, upstream)
+	}
+	for _, u := range mirror.Upstreams {
+		upstream, err := url.Parse(u)
+		if err != nil {
+			return nil, err
+		}
+		upstreams = append(upstreams, upstream)
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -136,176 +162,191 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 
 		err := func() error {
 
-			local_path := ""
-			remote_url := upstream.Scheme + "://" + upstream.Host
+			for _, upstream := range upstreams {
 
-			if upstream.Path == "" {
-				remote_url += path.Clean(r.URL.Path)
-			} else {
-				remote_url += path.Clean(upstream.Path + "/" + strings.TrimPrefix(r.URL.Path, mirror.Prefix))
-			}
+				local_path := ""
+				remote_url := upstream.Scheme + "://" + upstream.Host
 
-			if mirror.should_cache(remote_url) {
-				local_path = config.Data + path.Clean(r.URL.Path)
-
-				_, err := os.Stat(local_path)
-				if err == nil {
-					fileserver.ServeHTTP(w, r)
-					return nil
+				if upstream.Path == "" {
+					remote_url += path.Clean(r.URL.Path)
+				} else {
+					remote_url += path.Clean(upstream.Path + "/" + strings.TrimPrefix(r.URL.Path, mirror.Prefix))
 				}
-			}
 
-			var download *Download
-			var ok bool
+				if mirror.should_cache(remote_url) {
+					local_path = config.Data + path.Clean(r.URL.Path)
 
-			downloads_mu.Lock()
-
-			if r.Header.Get("Range") == "" && local_path != "" {
-				download, ok = downloads[local_path]
-				if ok {
-					fh, err := os.Open(download.tmp_path)
-					downloads_mu.Unlock()
-					if err != nil {
-						return err
-					}
-					return tmp_download(local_path, w, download, fh)
-				}
-			}
-
-			// downloads_mu is still locked. take care.
-			// we need to keep it locked until we have
-			// registered a download, opened a temp file,
-			// and saved it's path into the tmp_path in
-			// the struct.
-			// then we need to make sure to release.
-
-			log.Println("-->", remote_url)
-
-			req, err := http.NewRequest("GET", remote_url, nil)
-			if err != nil {
-				downloads_mu.Unlock()
-				return err
-			}
-
-			for k, vs := range r.Header {
-				if !hopHeaders[k] {
-					for _, v := range vs {
-						req.Header.Add(k, v)
+					_, err := os.Stat(local_path)
+					if err == nil {
+						fileserver.ServeHTTP(w, r)
+						return nil
 					}
 				}
-			}
 
-			resp, err := http_client.Do(req)
-			if err != nil {
-				downloads_mu.Unlock()
-				return err
-			}
-			defer resp.Body.Close()
+				var download *Download
+				var ok bool
 
-			out := io.Writer(w)
+				downloads_mu.Lock()
 
-			tmp_path := ""
+				if r.Header.Get("Range") == "" && local_path != "" {
+					download, ok = downloads[local_path]
+					if ok {
+						fh, err := os.Open(download.tmp_path)
+						downloads_mu.Unlock()
+						if err != nil {
+							return err
+						}
+						return tmp_download(local_path, w, download, fh)
+					}
+				}
 
-			var tmp_needs_final_close io.Closer
+				// downloads_mu is still locked. take care.
+				// we need to keep it locked until we have
+				// registered a download, opened a temp file,
+				// and saved it's path into the tmp_path in
+				// the struct.
+				// then we need to make sure to release.
 
-			// We don't want to cache the result if the server
-			// returns with a 206.
-			if resp.StatusCode == 200 && local_path != "" {
-				tmp, err := ioutil.TempFile(config.Data, "remirror_tmp_")
+				log.Println("-->", remote_url)
+
+				req, err := http.NewRequest("GET", remote_url, nil)
 				if err != nil {
 					downloads_mu.Unlock()
 					return err
 				}
-				tmp_needs_final_close = tmp
-				tmp_path = tmp.Name()
-				//fmt.Println("tmp", tmp_path)
 
-				defer tmp.Close()
-				defer os.Remove(tmp_path)
-
-				out = io.MultiWriter(out, tmp)
-
-				// at this point we have a "successful" download in
-				// progress. save into the struct.
-				download = &Download{
-					resp:     resp,
-					tmp_path: tmp_path,
-					tmp_done: make(chan struct{}),
-				}
-				downloads[local_path] = download
-			}
-			// release the mutex. if we have a successful download in
-			// progress, we have stored it correctly so far. if not,
-			// we unlock, leaving the download struct unmodified. the
-			// next request to try that URL will retry.
-			downloads_mu.Unlock()
-
-			// however we quit, we want to clear the download in progress
-			// entry. this deferred func should run before the deferred
-			// cleanup funcs above, so the filehandle should still be
-			// valid when we clear it out.
-			defer func() {
-				if download == nil {
-					// we didn't end up using the map for some reason.
-					// (maybe empty content length, non 200 response, etc)
-					return
+				for k, vs := range r.Header {
+					if !hopHeaders[k] {
+						for _, v := range vs {
+							req.Header.Add(k, v)
+						}
+					}
 				}
 
-				// make sure final close has been called. things might still
-				// be writing, and we need that to be done before
-				// we close tmp_done
-				_ = tmp_needs_final_close.Close()
-
-				close(download.tmp_done)
-
-				downloads_mu.Lock()
-				delete(downloads, local_path)
-				downloads_mu.Unlock()
-			}()
-
-			write_resp_headers(w, resp)
-
-			n, err := io.Copy(out, resp.Body)
-			if err != nil {
-				log.Println(err)
-				return nil
-			}
-
-			if n != resp.ContentLength && resp.ContentLength != -1 {
-				log.Printf("Short data returned from server (Content-Length %d received %d)\n", resp.ContentLength, n)
-
-				// Not really an HTTP error, leave it up to the client.
-				// but we aren't going to save our response to the cache.
-				return nil
-			}
-
-			if tmp_path != "" {
-				os.MkdirAll(path.Dir(local_path), 0755)
-
-				err = tmp_needs_final_close.Close()
+				resp, err := http_client.Do(req)
 				if err != nil {
-					log.Println(err)
-					return nil
+					downloads_mu.Unlock()
+					return err
+				}
+				defer resp.Body.Close()
+
+				// Try another mirror if we get certain status codes
+				if resp.StatusCode == 404 ||
+					resp.StatusCode == 500 ||
+					resp.StatusCode == 503 {
+					downloads_mu.Unlock()
+					continue
 				}
 
-				// clear from struct before renaming
-				if download != nil {
+				out := io.Writer(w)
+
+				tmp_path := ""
+
+				var tmp_needs_final_close io.Closer
+
+				// We don't want to cache the result if the server
+				// returns with a 206 Partial Content
+				if resp.StatusCode == 200 && local_path != "" {
+					tmp, err := ioutil.TempFile(config.Data, "remirror_tmp_")
+					if err != nil {
+						downloads_mu.Unlock()
+						return err
+					}
+					tmp_needs_final_close = tmp
+					tmp_path = tmp.Name()
+					//fmt.Println("tmp", tmp_path)
+
+					defer tmp.Close()
+					defer os.Remove(tmp_path)
+
+					out = io.MultiWriter(out, tmp)
+
+					// at this point we have a "successful" download in
+					// progress. save into the struct.
+					download = &Download{
+						resp:     resp,
+						tmp_path: tmp_path,
+						tmp_done: make(chan struct{}),
+					}
+					downloads[local_path] = download
+				}
+				// release the mutex. if we have a successful download in
+				// progress, we have stored it correctly so far. if not,
+				// we unlock, leaving the download struct unmodified. the
+				// next request to try that URL will retry.
+				downloads_mu.Unlock()
+
+				// however we quit, we want to clear the download in progress
+				// entry. this deferred func should run before the deferred
+				// cleanup funcs above, so the filehandle should still be
+				// valid when we clear it out.
+				defer func() {
+					if download == nil {
+						// we didn't end up using the map for some reason.
+						// (maybe empty content length, non 200 response, etc)
+						return
+					}
+
+					// make sure final close has been called. things might still
+					// be writing, and we need that to be done before
+					// we close tmp_done
+					_ = tmp_needs_final_close.Close()
+
 					close(download.tmp_done)
+
 					downloads_mu.Lock()
 					delete(downloads, local_path)
 					downloads_mu.Unlock()
-					download = nil // so we don't re-close
-				}
+				}()
 
-				err = os.Rename(tmp_path, local_path)
+				write_resp_headers(w, resp)
+
+				n, err := io.Copy(out, resp.Body)
 				if err != nil {
 					log.Println(err)
 					return nil
 				}
-				log.Println(">:)")
+
+				if n != resp.ContentLength && resp.ContentLength != -1 {
+					log.Printf("Short data returned from server (Content-Length %d received %d)\n", resp.ContentLength, n)
+
+					// Not really an HTTP error, leave it up to the client.
+					// but we aren't going to save our response to the cache.
+					return nil
+				}
+
+				if tmp_path != "" {
+					os.MkdirAll(path.Dir(local_path), 0755)
+
+					err = tmp_needs_final_close.Close()
+					if err != nil {
+						log.Println(err)
+						return nil
+					}
+
+					// clear from struct before renaming
+					if download != nil {
+						close(download.tmp_done)
+						downloads_mu.Lock()
+						delete(downloads, local_path)
+						downloads_mu.Unlock()
+						download = nil // so we don't re-close
+					}
+
+					err = os.Rename(tmp_path, local_path)
+					if err != nil {
+						log.Println(err)
+						return nil
+					}
+					log.Println(">:)")
+				}
+
+				return nil
+
 			}
 
-			return nil
+			return HTTPError(404)
+
 		}()
 
 		he, ok := err.(HTTPError)
