@@ -106,6 +106,11 @@ func (mirror Mirror) should_cache(path string) bool {
 		return false
 	}
 
+	// Same for ubuntu
+	if strings.HasSuffix(path, "/Packages.gz") || strings.HasSuffix(path, "/Sources.gz") {
+		return false
+	}
+
 	// Otherwise cache everything that looks like an archive.
 	if strings.HasSuffix(path, ".xz") ||
 		strings.HasSuffix(path, ".gz") ||
@@ -114,6 +119,7 @@ func (mirror Mirror) should_cache(path string) bool {
 		strings.HasSuffix(path, ".tgz") ||
 		strings.HasSuffix(path, ".rpm") ||
 		strings.HasSuffix(path, "-rpm.bin") ||
+		strings.HasSuffix(path, ".deb") ||
 		strings.HasSuffix(path, ".xz.sig") {
 		return true
 	}
