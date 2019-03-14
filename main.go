@@ -44,9 +44,9 @@ type Mirror struct {
 	Matches []Match
 }
 type Match struct {
-	Fail   bool
 	Prefix string
 	Suffix string
+	Skip   bool // skip = true means this is a "don't match" rule
 }
 
 func (mirror Mirror) String() string {
@@ -57,8 +57,8 @@ func (mirror Mirror) String() string {
 	s += " "
 	for i, m := range mirror.Matches {
 		ss := m.Prefix + "*" + m.Suffix
-		if m.Fail {
-			ss += " fail"
+		if m.Skip {
+			ss += " skip"
 		}
 		if i+1 < len(mirror.Matches) {
 			ss += ", "
@@ -83,31 +83,27 @@ type Download struct {
 }
 
 func (mirror Mirror) should_cache(path string) bool {
+	// Special rules for Debian/Ubuntu
+	if strings.HasSuffix(path, "/Packages.gz") || strings.HasSuffix(path, "/Sources.gz") {
+		return false
+	}
+
+	// Special rules for Arch
+	if strings.HasSuffix(path, ".abs.tar.gz") ||
+		strings.HasSuffix(path, ".db.tar.gz") ||
+		strings.HasSuffix(path, ".files.tar.gz") ||
+		strings.HasSuffix(path, ".links.tar.gz") {
+		return false
+	}
+
 	// Use custom match rules?
 	if len(mirror.Matches) > 0 {
 		for _, m := range mirror.Matches {
 			if strings.HasPrefix(path, m.Prefix) &&
 				strings.HasSuffix(path, m.Suffix) {
-				return !m.Fail
+				return !m.Skip
 			}
 		}
-		return false
-	}
-
-	// Arch has some DB files we don't want to cache even though
-	// they have archive suffixes. So we're a little more strict here.
-	if strings.HasPrefix(path, "/archlinux/") {
-		if strings.HasSuffix(path, ".pkg.tar.xz") {
-			return true
-		}
-		if strings.HasSuffix(path, ".pkg.tar.xz.sig") {
-			return true
-		}
-		return false
-	}
-
-	// Same for ubuntu
-	if strings.HasSuffix(path, "/Packages.gz") || strings.HasSuffix(path, "/Sources.gz") {
 		return false
 	}
 
@@ -120,6 +116,7 @@ func (mirror Mirror) should_cache(path string) bool {
 		strings.HasSuffix(path, ".rpm") ||
 		strings.HasSuffix(path, "-rpm.bin") ||
 		strings.HasSuffix(path, ".deb") ||
+		strings.HasSuffix(path, ".jar") ||
 		strings.HasSuffix(path, ".xz.sig") {
 		return true
 	}
