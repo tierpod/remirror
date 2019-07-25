@@ -148,6 +148,11 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 				remote_url += path.Clean(upstream.Path + "/" + strings.TrimPrefix(r.URL.Path, mirror.Prefix))
 			}
 
+			// Ugh... This is not the right way to do this.
+			// I'm not sure how to make it encode + to %,
+			// while not encoding /
+			remote_url = strings.Replace(remote_url, "+", "%2B", -1)
+
 			if mirror.should_cache(remote_url) {
 				local_path = config.Data + path.Clean(r.URL.Path)
 
