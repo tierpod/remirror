@@ -16,6 +16,8 @@ import (
 	"github.com/hashicorp/hcl"
 )
 
+const VERSION = "0.0.6"
+
 type Config struct {
 	Listen  string // HTTP listen address. ":8084"
 	Data    string // Storage location for cached files. "/var/remirror"
@@ -353,6 +355,15 @@ func load_configs(config *Config) error {
 }
 
 func main() {
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" {
+			fmt.Println("remirror", VERSION)
+			os.Exit(0)
+		}
+		fmt.Println("Unhandled argument", arg)
+		os.Exit(1)
+	}
+
 	config := &Config{}
 
 	if err := load_configs(config); err != nil {
