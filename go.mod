@@ -1,3 +1,5 @@
 module github.com/yobert/remirror
 
-require github.com/hashicorp/hcl v0.0.0-20180404174102-ef8a98b0bbce
+go 1.16
+
+require github.com/hashicorp/hcl v1.0.0
