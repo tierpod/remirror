@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -257,7 +256,7 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 				// We don't want to cache the result if the server
 				// returns with a 206 Partial Content
 				if resp.StatusCode == 200 && local_path != "" {
-					tmp, err := ioutil.TempFile(config.Data, "remirror_tmp_")
+					tmp, err := os.CreateTemp(config.Data, "remirror_tmp_")
 					if err != nil {
 						downloads_mu.Unlock()
 						return err
@@ -382,7 +381,7 @@ func load_configs(config *Config) error {
 		_, err := os.Stat(t)
 		if err == nil {
 			log.Printf("Loading configuration from %#v ...\n", t)
-			config_bytes, err := ioutil.ReadFile(t)
+			config_bytes, err := os.ReadFile(t)
 			if err != nil {
 				return err
 			}
