@@ -13,10 +13,10 @@ var hopHeaders = map[string]bool{
 	"Keep-Alive":          true,
 	"Proxy-Authenticate":  true,
 	"Proxy-Authorization": true,
-	"Te":                true,
-	"Trailer":           true,
-	"Transfer-Encoding": true,
-	"Upgrade":           true,
+	"Te":                  true,
+	"Trailer":             true,
+	"Transfer-Encoding":   true,
+	"Upgrade":             true,
 }
 
 type HTTPError int

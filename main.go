@@ -16,6 +16,8 @@ import (
 	"github.com/hashicorp/hcl"
 )
 
+const VERSION = "0.0.6"
+
 type Config struct {
 	Listen  string // HTTP listen address. ":8084"
 	Data    string // Storage location for cached files. "/var/remirror"
@@ -47,9 +49,9 @@ type Mirror struct {
 	Matches []Match
 }
 type Match struct {
-	Fail   bool
 	Prefix string
 	Suffix string
+	Skip   bool // skip = true means this is a "don't match" rule
 }
 
 func (mirror Mirror) String() string {
@@ -71,8 +73,8 @@ func (mirror Mirror) String() string {
 	s += " "
 	for i, m := range mirror.Matches {
 		ss := m.Prefix + "*" + m.Suffix
-		if m.Fail {
-			ss += " fail"
+		if m.Skip {
+			ss += " skip"
 		}
 		if i+1 < len(mirror.Matches) {
 			ss += ", "
@@ -97,25 +99,26 @@ type Download struct {
 }
 
 func (mirror Mirror) should_cache(path string) bool {
+	// Special rules for Debian/Ubuntu
+	if strings.HasSuffix(path, "/Packages.gz") || strings.HasSuffix(path, "/Sources.gz") {
+		return false
+	}
+
+	// Special rules for Arch
+	if strings.HasSuffix(path, ".abs.tar.gz") ||
+		strings.HasSuffix(path, ".db.tar.gz") ||
+		strings.HasSuffix(path, ".files.tar.gz") ||
+		strings.HasSuffix(path, ".links.tar.gz") {
+		return false
+	}
+
 	// Use custom match rules?
 	if len(mirror.Matches) > 0 {
 		for _, m := range mirror.Matches {
 			if strings.HasPrefix(path, m.Prefix) &&
 				strings.HasSuffix(path, m.Suffix) {
-				return !m.Fail
+				return !m.Skip
 			}
-		}
-		return false
-	}
-
-	// Arch has some DB files we don't want to cache even though
-	// they have archive suffixes. So we're a little more strict here.
-	if strings.HasPrefix(path, "/archlinux/") {
-		if strings.HasSuffix(path, ".pkg.tar.xz") {
-			return true
-		}
-		if strings.HasSuffix(path, ".pkg.tar.xz.sig") {
-			return true
 		}
 		return false
 	}
@@ -128,6 +131,8 @@ func (mirror Mirror) should_cache(path string) bool {
 		strings.HasSuffix(path, ".tgz") ||
 		strings.HasSuffix(path, ".rpm") ||
 		strings.HasSuffix(path, "-rpm.bin") ||
+		strings.HasSuffix(path, ".deb") ||
+		strings.HasSuffix(path, ".jar") ||
 		strings.HasSuffix(path, ".xz.sig") {
 		return true
 	}
@@ -166,6 +171,11 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 
 				local_path := ""
 				remote_url := upstream.Scheme + "://" + upstream.Host
+
+				// Ugh... This is not the right way to do this.
+				// I'm not sure how to make it encode + to %,
+				// while not encoding /
+				remote_url = strings.Replace(remote_url, "+", "%2B", -1)
 
 				if upstream.Path == "" {
 					remote_url += path.Clean(r.URL.Path)
@@ -386,6 +396,15 @@ func load_configs(config *Config) error {
 }
 
 func main() {
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" {
+			fmt.Println("remirror", VERSION)
+			os.Exit(0)
+		}
+		fmt.Println("Unhandled argument", arg)
+		os.Exit(1)
+	}
+
 	config := &Config{}
 
 	if err := load_configs(config); err != nil {
