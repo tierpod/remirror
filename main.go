@@ -16,6 +16,7 @@ import (
 )
 
 const VERSION = "0.0.6"
+const defaultTTL = 24 // hours
 
 type Config struct {
 	Listen  string // HTTP listen address. ":8084"
@@ -53,6 +54,7 @@ type Match struct {
 	Prefix string
 	Suffix string
 	Skip   bool // skip = true means this is a "don't match" rule
+	TTL    int
 }
 
 func (mirror Mirror) String() string {
@@ -97,10 +99,12 @@ type Download struct {
 	tmp_done chan struct{} // will be closed when download is done and final bytes written
 }
 
-func (mirror Mirror) should_cache(path string) bool {
+func (mirror Mirror) should_cache(path string) (bool, int) {
+	ttl := defaultTTL
+
 	// Special rules for Debian/Ubuntu
 	if strings.HasSuffix(path, "/Packages.gz") || strings.HasSuffix(path, "/Sources.gz") {
-		return false
+		return false, 0
 	}
 
 	// Special rules for Arch
@@ -108,18 +112,17 @@ func (mirror Mirror) should_cache(path string) bool {
 		strings.HasSuffix(path, ".db.tar.gz") ||
 		strings.HasSuffix(path, ".files.tar.gz") ||
 		strings.HasSuffix(path, ".links.tar.gz") {
-		return false
+		return false, 0
 	}
 
 	// Use custom match rules?
 	if len(mirror.Matches) > 0 {
 		for _, m := range mirror.Matches {
-			if strings.HasPrefix(path, m.Prefix) &&
-				strings.HasSuffix(path, m.Suffix) {
-				return !m.Skip
+			if strings.HasPrefix(path, m.Prefix) && strings.HasSuffix(path, m.Suffix) {
+				return !m.Skip, m.TTL
 			}
 		}
-		return false
+		return false, 0
 	}
 
 	// Otherwise cache everything that looks like an archive.
@@ -133,9 +136,9 @@ func (mirror Mirror) should_cache(path string) bool {
 		strings.HasSuffix(path, ".deb") ||
 		strings.HasSuffix(path, ".jar") ||
 		strings.HasSuffix(path, ".xz.sig") {
-		return true
+		return true, ttl
 	}
-	return false
+	return false, 0
 }
 
 func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (http.Handler, error) {
@@ -191,14 +194,34 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 					remote_url += path.Clean(upstream.Path + "/" + strings.TrimPrefix(r.URL.Path, mirror.Prefix))
 				}
 
-				if mirror.should_cache(remote_url) {
+				should_cache, ttl := mirror.should_cache(remote_url)
+				if should_cache {
 					local_path = config.Data + path.Clean(r.URL.Path)
 
-					_, err := os.Stat(local_path)
+					fileInfo, err := os.Stat(local_path)
 					if err == nil {
-						log.Printf("-C-> %s", local_path)
-						fileserver.ServeHTTP(w, r)
-						return nil
+						// check if file expired
+						if ttl > 0 {
+							now := time.Now()
+							cacheUntil := fileInfo.ModTime().Add(time.Duration(ttl) * time.Hour)
+							if now.After(cacheUntil) {
+								log.Printf("I-> %v expired at %v, redownload", local_path, cacheUntil)
+								rmerr := os.Remove(local_path)
+								if rmerr != nil {
+									log.Println(err)
+								}
+							} else {
+								log.Printf("C-> %s", local_path)
+								fileserver.ServeHTTP(w, r)
+								return nil
+							}
+						} else {
+							log.Printf("C-> %s", local_path)
+							fileserver.ServeHTTP(w, r)
+							return nil
+						}
+					} else {
+						log.Println(err)
 					}
 				}
 

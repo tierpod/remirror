@@ -10,6 +10,12 @@ mirrors {
 	mirror {
 		prefix = "/centos/"
 		upstream = "https://mirrors.xmission.com"
+		Matches = [
+			{
+				Suffix = "repomd.xml"
+				TTL = 1  # hours
+			}
+		]
 	}
 
 	mirror {
@@ -25,4 +31,3 @@ mirrors {
 		upstream = "https://storage.googleapis.com"
 	}
 }
-
