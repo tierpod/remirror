@@ -46,6 +46,8 @@ type Mirror struct {
 
 	// If nil, default match set will be used
 	Matches []Match
+
+	Proxy string
 }
 type Match struct {
 	Prefix string
@@ -84,8 +86,6 @@ func (mirror Mirror) String() string {
 }
 
 var (
-	http_client = http.Client{}
-
 	downloads_mu sync.Mutex
 	downloads    = map[string]*Download{}
 )
@@ -161,8 +161,17 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 		upstreams = append(upstreams, upstream)
 	}
 
+	httpClient, err := newHTTPClient(mirror.Proxy)
+	if err != nil {
+		return nil, err
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Println(r.Method + " http://" + r.Host + r.RequestURI)
+		if mirror.Proxy == "" {
+			log.Println(r.Method + " http://" + r.Host + r.RequestURI)
+		} else {
+			log.Println(r.Method + " http://" + r.Host + r.RequestURI + " proxy=" + mirror.Proxy)
+		}
 
 		err := func() error {
 
@@ -232,7 +241,7 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 					}
 				}
 
-				resp, err := http_client.Do(req)
+				resp, err := httpClient.Do(req)
 				if err != nil {
 					downloads_mu.Unlock()
 					return err
@@ -499,4 +508,19 @@ func tmp_download(local_path string, w http.ResponseWriter, download *Download, 
 			continue
 		}
 	}
+}
+
+func newHTTPClient(proxyURL string) (*http.Client, error) {
+	if proxyURL == "" {
+		return &http.Client{}, nil
+	}
+
+	url, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+
+	proxy := http.ProxyURL(url)
+	transport := &http.Transport{Proxy: proxy}
+	return &http.Client{Transport: transport}, nil
 }
