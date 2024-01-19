@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -402,8 +403,8 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 	}), nil
 }
 
-func load_configs(config *Config) error {
-	try := []string{"remirror.hcl"}
+func load_configs(config *Config, path string) error {
+	try := []string{path}
 	home := os.Getenv("HOME")
 	if home != "" {
 		try = append(try, home+"/.remirror.hcl")
@@ -428,18 +429,23 @@ func load_configs(config *Config) error {
 }
 
 func main() {
-	for _, arg := range os.Args[1:] {
-		if arg == "--version" {
-			fmt.Println("remirror", VERSION)
-			os.Exit(0)
-		}
-		fmt.Println("Unhandled argument", arg)
-		os.Exit(1)
+	var (
+		flagVersion bool
+		flagConfig  string
+	)
+
+	flag.BoolVar(&flagVersion, "version", false, "show version and exit")
+	flag.StringVar(&flagConfig, "config", "remirror.hcl", "Path to config file")
+	flag.Parse()
+
+	if flagVersion {
+		fmt.Println("remirror", VERSION)
+		os.Exit(0)
 	}
 
 	config := &Config{}
 
-	if err := load_configs(config); err != nil {
+	if err := load_configs(config, flagConfig); err != nil {
 		log.Fatalf("Config error: %v", err)
 	}
 
