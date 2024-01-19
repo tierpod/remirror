@@ -196,6 +196,7 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 
 					_, err := os.Stat(local_path)
 					if err == nil {
+						log.Printf("-C-> %s", local_path)
 						fileserver.ServeHTTP(w, r)
 						return nil
 					}
@@ -225,7 +226,7 @@ func (mirror Mirror) CreateHandler(config *Config, fileserver http.Handler) (htt
 				// the struct.
 				// then we need to make sure to release.
 
-				log.Println("-->", remote_url)
+				log.Printf("--> %s %s", remote_url, mirror.Proxy)
 
 				req, err := http.NewRequest("GET", remote_url, nil)
 				if err != nil {
